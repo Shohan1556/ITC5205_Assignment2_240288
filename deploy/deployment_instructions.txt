@@ -1,0 +1,171 @@
+================================================================
+DEPLOYMENT INSTRUCTIONS
+ITC5205 Assignment 2 -- AWS Serverless Image Object Detection
+Student: Abu Tawhid Shohan (240288)
+================================================================
+
+PRE-REQUISITES
+--------------
+- AWS account with console access
+- Region: us-east-1 (N. Virginia)
+- AWS CloudShell or curl installed for testing
+
+----------------------------------------------------------------
+STEP 1 -- IAM Role
+----------------------------------------------------------------
+1. Go to IAM > Roles > Create role
+2. Trusted entity: AWS service > Lambda
+3. Attach the following managed policies:
+   - AmazonS3FullAccess
+   - AmazonDynamoDBFullAccess
+   - AmazonRekognitionFullAccess
+   - AWSLambdaBasicExecutionRole
+4. Role name: yolov5-detection-role
+5. Click Create role
+
+----------------------------------------------------------------
+STEP 2 -- Amazon S3 Bucket
+----------------------------------------------------------------
+1. Go to S3 > Create bucket
+2. Bucket name: yolov5-detection-<your-student-id>
+3. Region: us-east-1
+4. Keep Block Public Access enabled
+5. Create bucket
+6. Inside bucket, create two folders:
+   - input-images/
+   - detection-results/
+7. Upload test images (JPEG) to input-images/
+
+----------------------------------------------------------------
+STEP 3 -- Amazon DynamoDB Table
+----------------------------------------------------------------
+1. Go to DynamoDB > Create table
+2. Table name: DetectionResults
+3. Partition key: image_id (String)
+4. Sort key: timestamp (String)
+5. Table settings: Customize settings
+6. Table class: DynamoDB Standard
+7. Capacity mode: On-demand
+8. Click Create table
+9. Wait for status: Active
+
+----------------------------------------------------------------
+STEP 4 -- AWS Lambda Function
+----------------------------------------------------------------
+1. Go to Lambda > Create function > Author from scratch
+2. Function name: yolov5-detection-function
+3. Runtime: Python 3.12
+4. Architecture: x86_64
+5. Permissions: Use existing role > yolov5-detection-role
+6. Click Create function
+7. Go to Configuration > General configuration > Edit:
+   - Memory: 512 MB
+   - Timeout: 1 min 0 sec
+   - Save
+8. Go to Configuration > Environment variables > Edit:
+   - Add: BUCKET_NAME = yolov5-detection-<your-student-id>
+   - Add: DYNAMODB_TABLE = DetectionResults
+   - Save
+9. Go to Code tab, open lambda_function.py
+10. Delete existing code, paste contents of code/lambda_function.py
+11. Click Deploy
+
+----------------------------------------------------------------
+STEP 5 -- Test Lambda Directly
+----------------------------------------------------------------
+1. Go to Test tab > Create new event
+2. Event name: TestDetection
+3. Event JSON:
+   {
+     "body": "{\"image_key\": \"input-images/1.jpg\"}"
+   }
+4. Save and click Test
+5. Expected: Execution succeeded, statusCode 200
+6. Verify: S3 detection-results/ has new JSON file
+7. Verify: DynamoDB DetectionResults has new item
+
+----------------------------------------------------------------
+STEP 6 -- Amazon API Gateway
+----------------------------------------------------------------
+1. Go to API Gateway > Create API > REST API > Build
+2. API name: yolov5-detection-api
+3. Endpoint type: Regional
+4. Create API
+5. Click Create resource:
+   - Resource name: detect
+   - Resource path: /detect
+   - Create resource
+6. With /detect selected, click Create method:
+   - Method type: POST
+   - Integration type: Lambda function
+   - Enable Lambda proxy integration: ON
+   - Lambda function: yolov5-detection-function (us-east-1)
+   - Create method
+7. Click Deploy API:
+   - Stage: *New stage*
+   - Stage name: prod
+   - Deploy
+8. Copy the Invoke URL shown on the prod stage page
+
+----------------------------------------------------------------
+STEP 7 -- API Key and Usage Plan
+----------------------------------------------------------------
+1. Go to API Keys > Create API key:
+   - Name: yolov5-api-key
+   - Auto generate
+   - Save
+   - Note the generated key value
+
+2. Go to Usage Plans > Create usage plan:
+   - Name: yolov5-usage-plan
+   - Rate: 100 requests/second
+   - Burst: 50
+   - Quota: 10000 requests/month
+   - Create
+
+3. Inside usage plan > Add stage:
+   - API: yolov5-detection-api
+   - Stage: prod
+   - Add to usage plan
+
+4. Inside usage plan > Associated API keys > Add API key:
+   - Select: yolov5-api-key
+   - Add API key
+
+5. Go back to API > Resources > /detect > POST > Method request > Edit:
+   - API key required: checked (true)
+   - Save
+
+6. Click Deploy API again:
+   - Stage: prod
+   - Deploy
+
+----------------------------------------------------------------
+STEP 8 -- Test Full Pipeline via CloudShell
+----------------------------------------------------------------
+Open AWS CloudShell and run:
+
+curl -X POST \
+  https://<your-api-id>.execute-api.us-east-1.amazonaws.com/prod/detect \
+  -H "Content-Type: application/json" \
+  -H "x-api-key: <YOUR_API_KEY>" \
+  -d '{"image_key": "input-images/1.jpg"}'
+
+Expected response:
+{
+  "message": "Detection complete",
+  "image_id": "1_jpg",
+  "labels_detected": 7,
+  "labels": [...],
+  "result_saved_to": "detection-results/1_jpg_<timestamp>.json"
+}
+
+----------------------------------------------------------------
+TROUBLESHOOTING
+----------------------------------------------------------------
+- 403 Forbidden     : Missing or incorrect x-api-key header
+- 400 Bad Request   : Missing image_key in request body
+- 500 Server Error  : Image not found in S3 or wrong format
+                      Check CloudWatch > Log groups >
+                      /aws/lambda/yolov5-detection-function
+================================================================
